@@ -1,14 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"time"
 )
 
 type RequestHandler struct {
-	Nodes       []*Node
-	ActiveNodes int
-	TotalNodes  int
-	Active      bool
+	Nodes      []*Node
+	LeaderNode int
+	TotalNodes int
+	Active     bool
 }
 
 type Message struct {
@@ -31,11 +32,42 @@ func InitHandler(n int) *RequestHandler {
 	r.Nodes = make([]*Node, n)
 	for i := 0; i < n; i++ {
 		r.Nodes[i] = InitNode(i, r)
+		r.Nodes[i].Activate()
 	}
 	r.TotalNodes = n
-	r.ActiveNodes = 0
+	r.LeaderNode = -1
 	r.Active = true
 	return r
+}
+
+func (r *RequestHandler) TurnOff() {
+	for i := 0; i < r.TotalNodes; i++ {
+		r.Nodes[i].Deactivate()
+	}
+	r.Active = false
+	r.LeaderNode = -1
+}
+
+func ParseState(state int) string {
+	switch state {
+	case Leader:
+		return "Leader"
+	case Follower:
+		return "Follower"
+	case Candidate:
+		return "Candidate"
+	}
+}
+
+func (r *RequestHandler) ListNodes() string {
+	reply := "Nodes in cluster:\n"
+	for i := 0; i < s.Handler.TotalN; i++ {
+		n := r.Nodes[i]
+		if n.Active {
+			reply += fmt.Sprintf("Id: %s, state: %s, Up for: %s\n", n.Id, ParseState(n.State), time.Since(n.StartTime))
+		}
+	}
+	return reply
 }
 
 // Write to the message queue of a certain node
@@ -55,6 +87,15 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 	return true
 }
 
+// Push a client message to the leader node
+func (r *RequestHandler) PushClientMsg(msg string) bool {
+	if r.LeaderNode == -1 {
+		return false
+	}
+	r.Nodes[r.LeaderNode].AppendClientMsg()
+	return true
+}
+
 // Signal all the nodes to prevent always waiting.
 func (r *RequestHandler) ClockTick() {
 	for r.Active {
@@ -66,17 +107,4 @@ func (r *RequestHandler) ClockTick() {
 		}
 		time.Sleep(time.Millisecond * 100)
 	}
-}
-
-func main() {
-	r := InitHandler(10)
-	r.Active = true
-	r.ActiveNodes = 2
-	r.Nodes[0].Activate()
-	r.Nodes[1].Activate()
-	go r.ClockTick()
-	rsp := r.Nodes[0].SendInitRequest(1)
-	println(rsp.Code, rsp.Msg)
-	time.Sleep(2 * time.Second)
-	r.Active = false
 }
