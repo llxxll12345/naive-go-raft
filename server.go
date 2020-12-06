@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -56,7 +57,7 @@ func (s *Simulator) StartNode(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte("Please provide valid node id!"))
 	}
-	if id_num < 0 || id_num >= s.Handler == -1 {
+	if id_num < 0 || id_num >= s.Handler.TotalNodes {
 		w.WriteHeader(400)
 		w.Write([]byte("Invalid node id!"))
 		return
@@ -67,11 +68,31 @@ func (s *Simulator) StartNode(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Simulator) AddPartition(w http.ResponseWriter, req *http.Request) {
-
+	query := req.URL.Query()
+	id, ok := query["id"]
+	if !ok {
+		w.WriteHeader(400)
+		w.Write([]byte("Please provide node id!"))
+		return
+	}
+	id_nums = []int{}
+	for _, i := range id {
+		id_num, err := strconv.Atoi(i)
+		if err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte("Please provide valid node id!"))
+		}
+		id_nums = append(id_nums, id_num)
+	}
+	s.Handler.AddPartition(id_nums)
+	w.WriteHeader(200)
+	w.Write([]byte(fmt.Sprintf("Parition added: %d\n", s.Handler.ParitionNum)))
 }
 
 func (s *Simulator) RemovePartition(w http.ResponseWriter, req *http.Request) {
-
+	s.Handler.RemovePartition()
+	w.WriteHeader(200)
+	w.Write([]byte(fmt.Sprintf("Parition removed: %d\n", s.Handler.ParitionNum+1)))
 }
 
 func (s *Simulator) ListNodes(w http.ResponseWriter, req *http.Request) {
@@ -153,7 +174,8 @@ func (s *Simulator) StopHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	http.HandleFunc("/addNode", AddNode)
+	s := &Simulator{}
+	http.HandleFunc("/stopLeaderNode", s.StopLeaderNode)
 	http.HandleFunc("/stopNode", StopNode)
 	http.HandleFunc("/startHand", StartHandler)
 	http.HandleFunc("/stopHand", StopHandler)

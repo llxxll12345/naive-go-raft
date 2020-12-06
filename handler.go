@@ -6,10 +6,12 @@ import (
 )
 
 type RequestHandler struct {
-	Nodes      []*Node
-	LeaderNode int
-	TotalNodes int
-	Active     bool
+	Nodes        []*Node
+	LeaderNode   int
+	TotalNodes   int
+	Active       bool
+	PartitionNum int
+	Partition    []int // Partition of each node
 }
 
 type Message struct {
@@ -37,7 +39,31 @@ func InitHandler(n int) *RequestHandler {
 	r.TotalNodes = n
 	r.LeaderNode = -1
 	r.Active = true
+	r.PartitionNum = 0
+	r.Partition = make([]int, n)
 	return r
+}
+
+func (r *RequestHandler) AddPartition(ids []int) {
+	r.PartitionNum += 1
+	for i, _ := range ids {
+		if i < 0 || i >= r.TotalNodes {
+			continue
+		}
+		r.Partition[i] = r.PartitionNum
+	}
+}
+
+func (r *RequestHandler) RemoveParition() {
+	if r.PartitionNum == 0 {
+		return
+	}
+	for i := 0; i < r.TotalNodes; i++ {
+		if r.Partition[i] == r.PartitionNum {
+			r.Partition[i] -= 1
+		}
+	}
+	r.PartitionNum -= 1
 }
 
 func (r *RequestHandler) TurnOff() {
@@ -57,11 +83,12 @@ func ParseState(state int) string {
 	case Candidate:
 		return "Candidate"
 	}
+	return ""
 }
 
 func (r *RequestHandler) ListNodes() string {
 	reply := "Nodes in cluster:\n"
-	for i := 0; i < s.Handler.TotalN; i++ {
+	for i := 0; i < r.TotalNodes; i++ {
 		n := r.Nodes[i]
 		if n.Active {
 			reply += fmt.Sprintf("Id: %s, state: %s, Up for: %s\n", n.Id, ParseState(n.State), time.Since(n.StartTime))
@@ -92,7 +119,7 @@ func (r *RequestHandler) PushClientMsg(msg string) bool {
 	if r.LeaderNode == -1 {
 		return false
 	}
-	r.Nodes[r.LeaderNode].AppendClientMsg()
+	r.Nodes[r.LeaderNode].AppendClientMsg(msg)
 	return true
 }
 

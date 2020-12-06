@@ -24,7 +24,7 @@ type Node struct {
 	PendingMsg  string
 	ClusterSize int
 
-	ClientMsg string[]     //client message set by simulator
+	ClientMsg []string   //client message set by simulator
 	CMutex    sync.Mutex //client message lock
 
 	CommitLog []string
@@ -409,5 +409,5 @@ func (n *Node) GetCommitLog() {
 func (n *Node) AppendClientMsg(msg string) {
 	n.ClientLock.Lock()
 	n.ClientMsg = append(n.ClientMsg, msg)
-	n.ClientLock.Unlock()	
+	n.ClientLock.Unlock()
 }
