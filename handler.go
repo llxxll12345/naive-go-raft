@@ -26,16 +26,18 @@ type Message struct {
 // Read or pop from the queue
 func InitHandler(n int) *RequestHandler {
 	r := &RequestHandler{}
-	r.Nodes = make([]*Node, n)
-	for i := 0; i < n; i++ {
-		r.Nodes[i] = InitNode(i, r)
-		r.Nodes[i].Activate()
-	}
+
 	r.TotalNodes = n
 	r.LeaderNode = -1
 	r.Active = true
 	r.PartitionNum = 0
 	r.Partition = make([]int, n)
+
+	r.Nodes = make([]*Node, n)
+	for i := 0; i < n; i++ {
+		r.Nodes[i] = InitNode(i, r)
+		r.Nodes[i].Activate()
+	}
 	go r.ClockTick()
 	return r
 }
@@ -102,6 +104,7 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 	if r.Nodes[src].Active == false || r.Nodes[dest].Active == false {
 		return false
 	}
+	println(msg)
 	r.Nodes[dest].QMutex.Lock()
 	m := Message{Src: src, Dest: dest, Msg: msg, Code: code, SeqNo: seqNo, Term: term}
 	r.Nodes[dest].MessageQueue = append(r.Nodes[dest].MessageQueue, m)

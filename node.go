@@ -109,6 +109,9 @@ func (n *Node) HandleRequest(m Message) {
 		n.LeaderSelected = true
 		n.EMutex.Unlock()
 		n.ECond.Broadcast()
+		if n.State == Leader && n.Term <= m.Term {
+			n.StepDown(m.Term)
+		}
 		n.ReplyRequest(m.Src, "approve", m.SeqNo)
 	case "append":
 		if n.Id == Leader {
@@ -177,6 +180,7 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 		}
 
 		s := n.MessageQueue[0]
+		println(s.SeqNo, n.SeqNo, s.Msg)
 		if s.Dest == n.Id && s.SeqNo == n.SeqNo {
 			n.MessageQueue = n.MessageQueue[1:]
 			n.QMutex.Unlock()
@@ -333,6 +337,7 @@ func (n *Node) Election() {
 		}
 	} else {
 		// Add a timeout here
+		n.State = Leader
 		n.EMutex.Unlock()
 		cnt := 0
 		for i := 0; i < n.ClusterSize; i++ {
@@ -355,13 +360,8 @@ func (n *Node) Election() {
 			n.ECond.Wait()
 		}
 
-		if cnt >= n.ClusterSize/2 || time.Since(start) >= time.Second*2 {
-			n.State = Leader
-			n.Handler.LeaderNode = n.Id
-
-			fmt.Printf("Node %d # Elected.\n", n.Id)
-			n.LogEvent("Elected.")
-
+		if cnt >= n.ClusterSize/2 {
+			println(cnt, n.ClusterSize)
 			n.Term += 1
 			for i := 0; i < n.ClusterSize; i++ {
 				if i == n.Id {
@@ -371,9 +371,14 @@ func (n *Node) Election() {
 					n.SendElectionResult(i)
 				}(i)
 			}
+		} else {
+			n.State = Follower
 		}
 		n.EMutex.Unlock()
 		if n.State == Leader {
+			n.Handler.LeaderNode = n.Id
+			fmt.Printf("Node %d # Elected.\n", n.Id)
+			n.LogEvent("Elected.")
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
