@@ -36,6 +36,7 @@ func InitHandler(n int) *RequestHandler {
 	r.Active = true
 	r.PartitionNum = 0
 	r.Partition = make([]int, n)
+	go r.ClockTick()
 	return r
 }
 
@@ -105,7 +106,9 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 	m := Message{Src: src, Dest: dest, Msg: msg, Code: code, SeqNo: seqNo, Term: term}
 	r.Nodes[dest].MessageQueue = append(r.Nodes[dest].MessageQueue, m)
 	r.Nodes[dest].QMutex.Unlock()
+
 	r.Nodes[dest].QCond.Broadcast()
+
 	return true
 }
 
@@ -120,11 +123,20 @@ func (r *RequestHandler) PushClientMsg(msg string) bool {
 
 // Signal all the nodes to prevent always waiting.
 func (r *RequestHandler) ClockTick() {
+	cnt := 0
 	for r.Active {
-		println("Tick")
+		if cnt == 10 {
+			cnt = 0
+			println("Tick")
+		}
+		cnt += 1
 		for _, n := range r.Nodes {
+			// Wake up to do timeout check.
 			if n.Active {
 				n.QCond.Broadcast()
+				n.ECond.Broadcast()
+				n.LCond.Broadcast()
+				n.CmtCond.Broadcast()
 			}
 		}
 		time.Sleep(time.Millisecond * 100)

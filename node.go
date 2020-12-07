@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -82,8 +83,10 @@ func (n *Node) Activate() {
 	n.QCond = sync.NewCond(&n.QMutex)
 	n.ECond = sync.NewCond(&n.EMutex)
 	n.CmtCond = sync.NewCond(&n.CmtMutex)
+	n.LCond = sync.NewCond(&n.LMutex)
 	n.StartTime = time.Now()
 	go n.ListenToRequest()
+	go n.RaftRun()
 }
 
 func (n *Node) Deactivate() {
@@ -148,7 +151,7 @@ func (n *Node) ListenToRequest() {
 		}
 		n.QMutex.Unlock()
 		// Wake up every 50ms
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -163,12 +166,12 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 	start := time.Now()
 
 	for n.Active {
-		for len(n.MessageQueue) == 0 && time.Since(start) <= 500*time.Millisecond {
+		for len(n.MessageQueue) == 0 && time.Since(start) <= 2*time.Second {
 			n.QCond.Wait()
 		}
 
 		// timeout after 500ms
-		if len(n.MessageQueue) == 0 || time.Since(start) >= 500*time.Millisecond {
+		if len(n.MessageQueue) == 0 || time.Since(start) >= 2*time.Second {
 			n.QMutex.Unlock()
 			return Response{Code: 408, Msg: "Timeout", Term: n.Term}
 		}
@@ -264,7 +267,7 @@ func (n *Node) PerformHeartBeat() {
 	start := time.Now()
 	n.CmtMutex.Lock()
 	// timeout here
-	for cnt < n.ClusterSize/2 && time.Since(start) <= time.Millisecond*500 {
+	for cnt < n.ClusterSize/2 && time.Since(start) <= time.Second*2 {
 		n.CmtCond.Wait()
 	}
 
@@ -274,7 +277,7 @@ func (n *Node) PerformHeartBeat() {
 		return
 	}
 
-	if cnt < n.ClusterSize/2 || time.Since(start) >= time.Millisecond*500 {
+	if cnt < n.ClusterSize/2 || time.Since(start) >= time.Second*2 {
 		n.CmtMutex.Unlock()
 		return
 	}
@@ -309,15 +312,18 @@ func (n *Node) Election() {
 	n.EMutex.Lock()
 	start := time.Now()
 	// Election time out (should be a randomized value)
-	for !n.VoteReached && time.Since(start) <= time.Millisecond*200 {
+	duration := rand.Intn(500) + 1500
+	for !n.VoteReached && time.Since(start) <= time.Duration(duration)*time.Millisecond {
 		n.ECond.Wait()
 	}
-	if time.Since(start) > time.Millisecond*200 {
+	/*if time.Since(start) > time.Millisecond*200 {
 		n.EMutex.Unlock()
 		return
-	}
+	}*/
+	fmt.Println(n.VoteReached)
+	//time.Sleep(time.Second * 2)
 	if n.VoteReached {
-		for !n.LeaderSelected && time.Since(start) <= time.Millisecond*200 {
+		for !n.LeaderSelected && time.Since(start) <= time.Second*2 {
 			n.ECond.Wait()
 		}
 		if n.LeaderSelected {
@@ -345,11 +351,11 @@ func (n *Node) Election() {
 		start = time.Now()
 		n.EMutex.Lock()
 		// timeout here
-		for cnt < n.ClusterSize/2 && time.Since(start) <= time.Millisecond*500 {
+		for cnt < n.ClusterSize/2 && time.Since(start) <= time.Second*2 {
 			n.ECond.Wait()
 		}
 
-		if cnt >= n.ClusterSize/2 || time.Since(start) >= time.Millisecond*500 {
+		if cnt >= n.ClusterSize/2 || time.Since(start) >= time.Second*2 {
 			n.State = Leader
 			n.Handler.LeaderNode = n.Id
 
@@ -368,7 +374,7 @@ func (n *Node) Election() {
 		}
 		n.EMutex.Unlock()
 		if n.State == Leader {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 		}
 	}
 }
@@ -379,7 +385,7 @@ func (n *Node) Leader() {
 	n.LogEvent("Leader start")
 	for n.Active && n.State == Leader {
 		go n.PerformHeartBeat()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -391,10 +397,11 @@ func (n *Node) Follower() {
 		n.LMutex.Lock()
 		start := time.Now()
 		// 150 ms time out
-		for !n.LeaderReached && time.Since(start) <= time.Millisecond*150 {
+		for !n.LeaderReached && time.Since(start) <= 2*time.Second {
 			n.LCond.Wait()
 		}
-		if (time.Since(start) > time.Millisecond*150) && !n.LeaderReached {
+		fmt.Printf("Node %d # wake up.\n", n.Id)
+		if time.Since(start) > 2*time.Second && !n.LeaderReached {
 			n.LMutex.Unlock()
 			n.State = Candidate
 			return
@@ -407,11 +414,11 @@ func (n *Node) RaftRun() {
 	// Election
 	for n.Active {
 		if n.State == Leader {
-			go n.Leader()
+			n.Leader()
 		} else if n.State == Candidate {
-			go n.Election()
+			n.Election()
 		} else {
-			go n.Follower()
+			n.Follower()
 		}
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -173,6 +174,23 @@ func (s *Simulator) StopHandler(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("Ended handler handler"))
 }
 
+func (s *Simulator) ClientSend(w http.ResponseWriter, req *http.Request) {
+	if s.Handler == nil {
+		w.WriteHeader(400)
+		w.Write([]byte("No handler yet!"))
+	}
+	query := req.URL.Query()
+	msg := query.Get("msg")
+	fmt.Println(msg)
+	res := s.Handler.PushClientMsg(msg)
+	if !res {
+		w.WriteHeader(400)
+		w.Write([]byte("No leader yet!"))
+	}
+	w.WriteHeader(200)
+	w.Write([]byte("Pushed the message!"))
+}
+
 func main() {
 	s := &Simulator{}
 	http.HandleFunc("/stopLeader", s.StopLeaderNode)
@@ -185,5 +203,9 @@ func main() {
 	http.HandleFunc("/addPart", s.AddPartition)
 	http.HandleFunc("/removePart", s.RemovePartition)
 	http.HandleFunc("/listNodes", s.ListNodes)
-	http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/clientSend", s.ClientSend)
+	log.Println("Start simulator at port 8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatal(err)
+	}
 }
