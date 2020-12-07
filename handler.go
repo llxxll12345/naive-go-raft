@@ -23,11 +23,6 @@ type Message struct {
 	Term  int
 }
 
-type Response struct {
-	Msg  string
-	Code int
-}
-
 // Read or pop from the queue
 func InitHandler(n int) *RequestHandler {
 	r := &RequestHandler{}
@@ -54,7 +49,7 @@ func (r *RequestHandler) AddPartition(ids []int) {
 	}
 }
 
-func (r *RequestHandler) RemoveParition() {
+func (r *RequestHandler) RemovePartition() {
 	if r.PartitionNum == 0 {
 		return
 	}

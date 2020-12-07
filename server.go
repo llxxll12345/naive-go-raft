@@ -18,7 +18,7 @@ func (s *Simulator) StopLeaderNode(w http.ResponseWriter, req *http.Request) {
 	}
 	s.Handler.Nodes[s.Handler.LeaderNode].Deactivate()
 	w.WriteHeader(200)
-	w.Write([]byte("Turned off leader node: " + s.Handler.LeaderNode))
+	w.Write([]byte(fmt.Sprintf("Turned off leader node: %d\n", s.Handler.LeaderNode)))
 }
 
 func (s *Simulator) StopNode(w http.ResponseWriter, req *http.Request) {
@@ -34,7 +34,7 @@ func (s *Simulator) StopNode(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte("Please provide valid node id!"))
 	}
-	if id_num < 0 || id_num >= s.Handler == -1 {
+	if id_num < 0 || id_num >= s.Handler.TotalNodes {
 		w.WriteHeader(400)
 		w.Write([]byte("Invalid node id!"))
 		return
@@ -75,7 +75,7 @@ func (s *Simulator) AddPartition(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("Please provide node id!"))
 		return
 	}
-	id_nums = []int{}
+	id_nums := []int{}
 	for _, i := range id {
 		id_num, err := strconv.Atoi(i)
 		if err != nil {
@@ -86,13 +86,13 @@ func (s *Simulator) AddPartition(w http.ResponseWriter, req *http.Request) {
 	}
 	s.Handler.AddPartition(id_nums)
 	w.WriteHeader(200)
-	w.Write([]byte(fmt.Sprintf("Parition added: %d\n", s.Handler.ParitionNum)))
+	w.Write([]byte(fmt.Sprintf("Parition added: %d\n", s.Handler.PartitionNum)))
 }
 
 func (s *Simulator) RemovePartition(w http.ResponseWriter, req *http.Request) {
 	s.Handler.RemovePartition()
 	w.WriteHeader(200)
-	w.Write([]byte(fmt.Sprintf("Parition removed: %d\n", s.Handler.ParitionNum+1)))
+	w.Write([]byte(fmt.Sprintf("Parition removed: %d\n", s.Handler.PartitionNum+1)))
 }
 
 func (s *Simulator) ListNodes(w http.ResponseWriter, req *http.Request) {
@@ -113,7 +113,7 @@ func (s *Simulator) GetEventLog(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte("Please provide valid node id!"))
 	}
-	if id_num < 0 || id_num >= s.Handler == -1 {
+	if id_num < 0 || id_num >= s.Handler.TotalNodes {
 		w.WriteHeader(400)
 		w.Write([]byte("Invalid node id!"))
 		return
@@ -135,7 +135,7 @@ func (s *Simulator) GetCommitLog(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte("Please provide valid node id!"))
 	}
-	if id_num < 0 || id_num >= s.Handler == -1 {
+	if id_num < 0 || id_num >= s.Handler.TotalNodes {
 		w.WriteHeader(400)
 		w.Write([]byte("Invalid node id!"))
 		return
@@ -175,9 +175,15 @@ func (s *Simulator) StopHandler(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 	s := &Simulator{}
-	http.HandleFunc("/stopLeaderNode", s.StopLeaderNode)
-	http.HandleFunc("/stopNode", StopNode)
-	http.HandleFunc("/startHand", StartHandler)
-	http.HandleFunc("/stopHand", StopHandler)
+	http.HandleFunc("/stopLeader", s.StopLeaderNode)
+	http.HandleFunc("/startHandler", s.StartHandler)
+	http.HandleFunc("/stopHandler", s.StopHandler)
+	http.HandleFunc("/getCommits", s.GetCommitLog)
+	http.HandleFunc("/getEvents", s.GetEventLog)
+	http.HandleFunc("/stopNode", s.StopNode)
+	http.HandleFunc("/startNode", s.StartNode)
+	http.HandleFunc("/addPart", s.AddPartition)
+	http.HandleFunc("/removePart", s.RemovePartition)
+	http.HandleFunc("/listNodes", s.ListNodes)
 	http.ListenAndServe(":8080", nil)
 }

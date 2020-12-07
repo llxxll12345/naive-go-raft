@@ -51,12 +51,17 @@ type Node struct {
 	StartTime time.Time
 }
 
+type Response struct {
+	Msg  string
+	Code int
+	Term int
+}
+
 func InitNode(id int, h *RequestHandler) *Node {
 	return &Node{
 		Id:           id,
 		State:        0,
 		Term:         0,
-		Reachable:    make(map[int]bool),
 		Active:       false,
 		Handler:      h,
 		CommitLog:    make([]string, 0),
@@ -64,6 +69,10 @@ func InitNode(id int, h *RequestHandler) *Node {
 		SeqNo:        0,
 		ClusterSize:  h.TotalNodes,
 	}
+}
+
+func (n *Node) LogEvent(msg string) {
+	n.EventLog = append(n.EventLog, msg)
 }
 
 // Only call activate and deactivate in overall handler,
@@ -87,17 +96,17 @@ func (n *Node) HandleRequest(m Message) {
 	case "hello":
 		n.ReplyInitRequest(m.Src, m.SeqNo)
 	case "vote":
-		n.ELock.lock()
-		VoteReached = true
-		n.ELock.Unlock()
+		n.EMutex.Lock()
+		n.VoteReached = true
+		n.EMutex.Unlock()
 		n.ECond.Broadcast()
-		n.ReplyVoteRequest(m.Src, "approve", m.SeqNo)
+		n.ReplyRequest(m.Src, "approve", m.SeqNo)
 	case "winner":
-		n.ELock.lock()
+		n.EMutex.Lock()
 		n.LeaderSelected = true
-		n.ELock.Unlock()
+		n.EMutex.Unlock()
 		n.ECond.Broadcast()
-		n.ReplyWinnerRequest(m.Src, "approve", m.SeqNo)
+		n.ReplyRequest(m.Src, "approve", m.SeqNo)
 	case "append":
 		if n.Id == Leader {
 			if n.Term < m.Term {
@@ -107,13 +116,13 @@ func (n *Node) HandleRequest(m Message) {
 				return
 			}
 		}
-		LeaderReached = true
+		n.LeaderReached = true
 		if len(content) > 1 {
 			n.PendingMsg = content[1]
 		}
 		n.ReplyRequest(m.Src, "ACK", m.SeqNo)
 	case "commit":
-		LeaderReached = true
+		n.LeaderReached = true
 		n.CmtMutex.Lock()
 		n.CommitLog = append(n.CommitLog, n.PendingMsg)
 		n.CmtMutex.Unlock()
@@ -123,13 +132,15 @@ func (n *Node) HandleRequest(m Message) {
 
 // Listen to requests.
 func (n *Node) ListenToRequest() {
-	println("Listener start.")
+	n.LogEvent("Listener start.")
+	fmt.Printf("Node %d # Listener start.\n", n.Id)
 	for n.Active {
 		n.QMutex.Lock()
 		if len(n.MessageQueue) > 0 {
-			//println("Received something")
 			s := n.MessageQueue[0]
 			if s.Dest == n.Id && s.Code == 0 {
+				fmt.Printf("Node %d # Message received from Node %d: %s\n", n.Id, s.Src, s.Msg)
+				n.LogEvent(fmt.Sprintf("Message received from Node %d: %s", s.Src, s.Msg))
 				n.MessageQueue = n.MessageQueue[1:]
 				// Don't block the listener, spawn a new handler each time.
 				go n.HandleRequest(s)
@@ -145,7 +156,7 @@ func (n *Node) ListenToRequest() {
 func (n *Node) SendAndListen(dest int, msg string) Response {
 	ok := n.Handler.SimulateSend(n.Id, dest, msg, 0, n.SeqNo, n.Term)
 	if !ok {
-		return Response{Code: 404, Msg: "Not Found"}
+		return Response{Code: 404, Msg: "Not Found", Term: n.Term}
 	}
 	n.SeqNo += 1
 	n.QMutex.Lock()
@@ -159,18 +170,18 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 		// timeout after 500ms
 		if len(n.MessageQueue) == 0 || time.Since(start) >= 500*time.Millisecond {
 			n.QMutex.Unlock()
-			return Response{Code: 408, Msg: "Timeout"}
+			return Response{Code: 408, Msg: "Timeout", Term: n.Term}
 		}
 
 		s := n.MessageQueue[0]
 		if s.Dest == n.Id && s.SeqNo == n.SeqNo {
 			n.MessageQueue = n.MessageQueue[1:]
 			n.QMutex.Unlock()
-			return Response{Code: s.Code, Msg: s.Msg}
+			return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
 		}
 	}
 	n.QMutex.Unlock()
-	return Response{Code: 404, Msg: "Not Found"}
+	return Response{Code: 404, Msg: "Not Found", Term: n.Term}
 }
 
 func (n *Node) SendInitRequest(dest int) Response {
@@ -178,7 +189,7 @@ func (n *Node) SendInitRequest(dest int) Response {
 }
 
 func (n *Node) SendElectionResult(dest int) Response {
-	return n.SendAndListen(dest, "winner "+n.Id)
+	return n.SendAndListen(dest, fmt.Sprintf("winner %d", n.Id))
 }
 
 func (n *Node) ReplyInitRequest(dest int, seqNo int) bool {
@@ -204,22 +215,24 @@ func (n *Node) SendCommitRequest(dest int) Response {
 }
 
 func (n *Node) StepDown(curTerm int) {
-	n.Term = rsp.term
+	n.Term = curTerm
 	n.State = Follower
-	CommitLog = make([]string, 0)
+	n.PendingMsg = ""
 }
 
-func (n *Node) PerformHeartBeat(dest int) {
+func (n *Node) PerformHeartBeat() {
+	n.LogEvent("Send Heartbeat.")
+	fmt.Printf("Node %d # Send Heartbeat.\n", n.Id)
 	if n.State != Leader {
 		return
 	}
 	cmsg := ""
-	n.ClientLock.Lock()
+	n.CMutex.Lock()
 	if len(n.ClientMsg) > 0 {
 		cmsg = n.ClientMsg[0]
 		n.ClientMsg = n.ClientMsg[1:]
 	}
-	n.ClientLock.UnLock()
+	n.CMutex.Unlock()
 
 	// Add a timeout here
 	cnt := 0
@@ -228,11 +241,12 @@ func (n *Node) PerformHeartBeat(dest int) {
 		if i == n.Id {
 			continue
 		}
-		go func(i) {
-			rsp := n.SendAppendRequest(i, msg)
-			if rsp.term > n.term {
+		go func(i int) {
+			rsp := n.SendAppendRequest(i, cmsg)
+			if rsp.Term > n.Term {
 				// step down
-				n.StepDown(rsp.term)
+				fmt.Printf("Node %d # Step down.\n", n.Id)
+				n.StepDown(rsp.Term)
 				return
 			}
 			if rsp.Code == 200 && rsp.Msg == "ACK" {
@@ -247,7 +261,7 @@ func (n *Node) PerformHeartBeat(dest int) {
 			}
 		}(i)
 	}
-	start = time.Now()
+	start := time.Now()
 	n.CmtMutex.Lock()
 	// timeout here
 	for cnt < n.ClusterSize/2 && time.Since(start) <= time.Millisecond*500 {
@@ -269,18 +283,20 @@ func (n *Node) PerformHeartBeat(dest int) {
 		n.CmtMutex.Unlock()
 		return
 	}
-	n.CommitLog = append(n.CommitLog, n.PendingMsg)
-	n.CmtCond.Unlock()
+
+	n.CommitLog = append(n.CommitLog, cmsg)
+	n.CmtMutex.Unlock()
 
 	// Then wait for ack
 	for i := 0; i < n.ClusterSize; i++ {
 		if i == n.Id {
 			continue
 		}
-		go func(i) {
+		go func(i int) {
 			rsp := n.SendCommitRequest(i)
 			if rsp.Code == 200 {
-				fmt.Printf("Commit \"%s\" on Node %d", cmsg, i)
+				fmt.Printf("Node %d # Commit \"%s\".\n", i, cmsg)
+				n.LogEvent("Commit " + cmsg)
 			}
 		}(i)
 	}
@@ -288,21 +304,23 @@ func (n *Node) PerformHeartBeat(dest int) {
 
 // Not receiving anything from a leader, then become a candidate.
 func (n *Node) Election() {
+	fmt.Printf("Node %d # Candidate start.\n", n.Id)
+	n.LogEvent("Candidate start")
 	n.EMutex.Lock()
-	start = time.Now()
+	start := time.Now()
 	// Election time out (should be a randomized value)
-	for !VoteReached && time.Since(start) <= time.Millisecond*200 {
-		n.EMutex.Wait()
+	for !n.VoteReached && time.Since(start) <= time.Millisecond*200 {
+		n.ECond.Wait()
 	}
 	if time.Since(start) > time.Millisecond*200 {
 		n.EMutex.Unlock()
 		return
 	}
-	if VoteReached {
-		for !LeaderSelected && time.Since(start) <= time.Millisecond*200 {
-			n.EMutex.Wait()
+	if n.VoteReached {
+		for !n.LeaderSelected && time.Since(start) <= time.Millisecond*200 {
+			n.ECond.Wait()
 		}
-		if LeaderSelected {
+		if n.LeaderSelected {
 			n.EMutex.Unlock()
 			n.State = Follower
 			return
@@ -315,8 +333,8 @@ func (n *Node) Election() {
 			if i == n.Id {
 				continue
 			}
-			go func(i) {
-				rsp := n.SendVoteRequest(i, msg)
+			go func(i int) {
+				rsp := n.SendVoteRequest(i)
 				n.EMutex.Lock()
 				if rsp.Code == 200 && rsp.Msg == "approve" {
 					cnt += 1
@@ -334,13 +352,17 @@ func (n *Node) Election() {
 		if cnt >= n.ClusterSize/2 || time.Since(start) >= time.Millisecond*500 {
 			n.State = Leader
 			n.Handler.LeaderNode = n.Id
+
+			fmt.Printf("Node %d # Elected.\n", n.Id)
+			n.LogEvent("Elected.")
+
 			n.Term += 1
 			for i := 0; i < n.ClusterSize; i++ {
 				if i == n.Id {
 					continue
 				}
-				go func(i) {
-					rsp := n.SendElectionResult(i)
+				go func(i int) {
+					n.SendElectionResult(i)
 				}(i)
 			}
 		}
@@ -353,7 +375,9 @@ func (n *Node) Election() {
 
 // Leader Program, heart beat every 100 seconds
 func (n *Node) Leader() {
-	for n.Active && n.state == Leader {
+	fmt.Printf("Node %d # Leader start.\n", n.Id)
+	n.LogEvent("Leader start")
+	for n.Active && n.State == Leader {
 		go n.PerformHeartBeat()
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -361,16 +385,18 @@ func (n *Node) Leader() {
 
 // Follower Program
 func (n *Node) Follower() {
-	for n.Active && n.state == Follower {
+	fmt.Printf("Node %d # Follower start.\n", n.Id)
+	n.LogEvent("Follower start")
+	for n.Active && n.State == Follower {
 		n.LMutex.Lock()
-		start = time.Now()
+		start := time.Now()
 		// 150 ms time out
 		for !n.LeaderReached && time.Since(start) <= time.Millisecond*150 {
 			n.LCond.Wait()
 		}
 		if (time.Since(start) > time.Millisecond*150) && !n.LeaderReached {
 			n.LMutex.Unlock()
-			n.state = Candidate
+			n.State = Candidate
 			return
 		}
 		n.LMutex.Unlock()
@@ -380,34 +406,34 @@ func (n *Node) Follower() {
 func (n *Node) RaftRun() {
 	// Election
 	for n.Active {
-		if n.state == Leader {
-			go Leader()
-		} else if n.state == Candidate {
-			go Election()
+		if n.State == Leader {
+			go n.Leader()
+		} else if n.State == Candidate {
+			go n.Election()
 		} else {
-			go Follower()
+			go n.Follower()
 		}
 	}
 }
 
-func (n *Node) GetEventLog() {
+func (n *Node) GetEventLog() string {
 	reply := ""
-	for s, _ := range n.EventLog {
+	for _, s := range n.EventLog {
 		reply += s + "\n"
 	}
 	return reply
 }
 
-func (n *Node) GetCommitLog() {
+func (n *Node) GetCommitLog() string {
 	reply := ""
-	for s, _ := range n.CommitLog {
+	for _, s := range n.CommitLog {
 		reply += s + "\n"
 	}
 	return reply
 }
 
 func (n *Node) AppendClientMsg(msg string) {
-	n.ClientLock.Lock()
+	n.CMutex.Lock()
 	n.ClientMsg = append(n.ClientMsg, msg)
-	n.ClientLock.Unlock()
+	n.CMutex.Unlock()
 }
