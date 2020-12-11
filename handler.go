@@ -89,7 +89,7 @@ func (r *RequestHandler) ListNodes() string {
 	for i := 0; i < r.TotalNodes; i++ {
 		n := r.Nodes[i]
 		if n.Active {
-			reply += fmt.Sprintf("Id: %s, state: %s, Up for: %s\n", n.Id, ParseState(n.State), time.Since(n.StartTime))
+			reply += fmt.Sprintf("Id: %d, state: %s, Up for: %s\n", n.Id, ParseState(n.State), time.Since(n.StartTime))
 		}
 	}
 	return reply
@@ -105,12 +105,19 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 		return false
 	}
 	println(msg)
-	r.Nodes[dest].QMutex.Lock()
 	m := Message{Src: src, Dest: dest, Msg: msg, Code: code, SeqNo: seqNo, Term: term}
-	r.Nodes[dest].MessageQueue = append(r.Nodes[dest].MessageQueue, m)
-	r.Nodes[dest].QMutex.Unlock()
 
-	r.Nodes[dest].QCond.Broadcast()
+	if code == 0 { // request message
+		r.Nodes[dest].RequestMutex.Lock()
+		r.Nodes[dest].RequestQueue = append(r.Nodes[dest].RequestQueue, m)
+		r.Nodes[dest].RequestMutex.Unlock()
+	} else { // reply message
+		println("REPLY")
+		r.Nodes[dest].ReplyMutex.Lock()
+		r.Nodes[dest].ReplyMap[m.SeqNo] = m
+		r.Nodes[dest].ReplyMutex.Unlock()
+		r.Nodes[dest].ReplyCond.Broadcast()
+	}
 
 	return true
 }
@@ -136,7 +143,7 @@ func (r *RequestHandler) ClockTick() {
 		for _, n := range r.Nodes {
 			// Wake up to do timeout check.
 			if n.Active {
-				n.QCond.Broadcast()
+				n.ReplyCond.Broadcast()
 				n.ECond.Broadcast()
 				n.LCond.Broadcast()
 				n.CmtCond.Broadcast()

@@ -36,9 +36,12 @@ type Node struct {
 
 	SeqNo int
 
-	QMutex       sync.Mutex
-	QCond        *sync.Cond
-	MessageQueue []Message
+	RequestMutex sync.Mutex
+	RequestQueue []Message
+
+	ReplyMutex sync.Mutex
+	ReplyCond  *sync.Cond
+	ReplyMap   map[int]Message
 
 	VoteReached    bool
 	LeaderSelected bool
@@ -66,7 +69,8 @@ func InitNode(id int, h *RequestHandler) *Node {
 		Active:       false,
 		Handler:      h,
 		CommitLog:    make([]string, 0),
-		MessageQueue: make([]Message, 0),
+		RequestQueue: make([]Message, 0),
+		ReplyMap:     make(map[int]Message),
 		SeqNo:        0,
 		ClusterSize:  h.TotalNodes,
 	}
@@ -80,7 +84,7 @@ func (n *Node) LogEvent(msg string) {
 // no data race protection of n.Active, Assuming only read in nodes.
 func (n *Node) Activate() {
 	n.Active = true
-	n.QCond = sync.NewCond(&n.QMutex)
+	n.ReplyCond = sync.NewCond(&n.ReplyMutex)
 	n.ECond = sync.NewCond(&n.EMutex)
 	n.CmtCond = sync.NewCond(&n.CmtMutex)
 	n.LCond = sync.NewCond(&n.LMutex)
@@ -141,18 +145,19 @@ func (n *Node) ListenToRequest() {
 	n.LogEvent("Listener start.")
 	fmt.Printf("Node %d # Listener start.\n", n.Id)
 	for n.Active {
-		n.QMutex.Lock()
-		if len(n.MessageQueue) > 0 {
-			s := n.MessageQueue[0]
+		n.RequestMutex.Lock()
+		if len(n.RequestQueue) > 0 {
+			s := n.RequestQueue[0]
 			if s.Dest == n.Id && s.Code == 0 {
 				fmt.Printf("Node %d # Message received from Node %d: %s\n", n.Id, s.Src, s.Msg)
 				n.LogEvent(fmt.Sprintf("Message received from Node %d: %s", s.Src, s.Msg))
-				n.MessageQueue = n.MessageQueue[1:]
+				n.RequestQueue = n.RequestQueue[1:]
+
 				// Don't block the listener, spawn a new handler each time.
 				go n.HandleRequest(s)
 			}
 		}
-		n.QMutex.Unlock()
+		n.RequestMutex.Unlock()
 		// Wake up every 50ms
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -165,29 +170,32 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 		return Response{Code: 404, Msg: "Not Found", Term: n.Term}
 	}
 	n.SeqNo += 1
-	n.QMutex.Lock()
+	n.ReplyMutex.Lock()
 	start := time.Now()
 
 	for n.Active {
-		for len(n.MessageQueue) == 0 && time.Since(start) <= 2*time.Second {
-			n.QCond.Wait()
+		for len(n.ReplyMap) == 0 || time.Since(start) <= 2*time.Second {
+			n.ReplyCond.Wait()
 		}
 
 		// timeout after 500ms
-		if len(n.MessageQueue) == 0 || time.Since(start) >= 2*time.Second {
-			n.QMutex.Unlock()
+		if len(n.ReplyMap) == 0 || time.Since(start) >= 2*time.Second {
+			n.ReplyMutex.Unlock()
 			return Response{Code: 408, Msg: "Timeout", Term: n.Term}
 		}
 
-		s := n.MessageQueue[0]
-		println(s.SeqNo, n.SeqNo, s.Msg)
-		if s.Dest == n.Id && s.SeqNo == n.SeqNo {
-			n.MessageQueue = n.MessageQueue[1:]
-			n.QMutex.Unlock()
-			return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
+		s, ok := n.ReplyMap[n.SeqNo]
+		if !ok {
+			continue
 		}
+		if s.SeqNo != n.SeqNo {
+			return Response{Code: -1, Msg: "Simulator Error", Term: n.Term}
+		}
+		println("Got it: ", s.SeqNo, n.SeqNo, s.Msg)
+		delete(n.ReplyMap, n.SeqNo)
+		return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
 	}
-	n.QMutex.Unlock()
+	n.ReplyMutex.Unlock()
 	return Response{Code: 404, Msg: "Not Found", Term: n.Term}
 }
 
@@ -281,7 +289,7 @@ func (n *Node) PerformHeartBeat() {
 		return
 	}
 
-	if cnt < n.ClusterSize/2 || time.Since(start) >= time.Second*2 {
+	if cnt < n.ClusterSize/2 {
 		n.CmtMutex.Unlock()
 		return
 	}
@@ -336,8 +344,6 @@ func (n *Node) Election() {
 			return
 		}
 	} else {
-		// Add a timeout here
-		n.State = Leader
 		n.EMutex.Unlock()
 		cnt := 0
 		for i := 0; i < n.ClusterSize; i++ {
@@ -348,6 +354,7 @@ func (n *Node) Election() {
 				rsp := n.SendVoteRequest(i)
 				n.EMutex.Lock()
 				if rsp.Code == 200 && rsp.Msg == "approve" {
+					println(rsp.Code)
 					cnt += 1
 				}
 				n.EMutex.Unlock()
@@ -359,7 +366,8 @@ func (n *Node) Election() {
 		for cnt < n.ClusterSize/2 && time.Since(start) <= time.Second*2 {
 			n.ECond.Wait()
 		}
-
+		println("Cnt: ", cnt)
+		n.State = Leader
 		if cnt >= n.ClusterSize/2 {
 			println(cnt, n.ClusterSize)
 			n.Term += 1
