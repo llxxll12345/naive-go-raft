@@ -34,7 +34,8 @@ type Node struct {
 
 	EventLog []string
 
-	SeqNo int
+	SeqMutex sync.Mutex
+	SeqNo    int
 
 	RequestMutex sync.Mutex
 	RequestQueue []Message
@@ -159,44 +160,52 @@ func (n *Node) ListenToRequest() {
 		}
 		n.RequestMutex.Unlock()
 		// Wake up every 50ms
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
 // Push to message queue.
 func (n *Node) SendAndListen(dest int, msg string) Response {
-	ok := n.Handler.SimulateSend(n.Id, dest, msg, 0, n.SeqNo, n.Term)
-	if !ok {
+	n.SeqMutex.Lock()
+	curSeq := n.SeqNo
+	n.SeqNo += 2
+	n.SeqMutex.Unlock()
+
+	sent := n.Handler.SimulateSend(n.Id, dest, msg, 0, curSeq, n.Term)
+	curSeq += 1
+	if !sent {
 		return Response{Code: 404, Msg: "Not Found", Term: n.Term}
 	}
-	n.SeqNo += 1
+
 	n.ReplyMutex.Lock()
 	start := time.Now()
 
-	for n.Active {
-		for len(n.ReplyMap) == 0 || time.Since(start) <= 2*time.Second {
-			n.ReplyCond.Wait()
-		}
-
-		// timeout after 500ms
-		if len(n.ReplyMap) == 0 || time.Since(start) >= 2*time.Second {
-			n.ReplyMutex.Unlock()
-			return Response{Code: 408, Msg: "Timeout", Term: n.Term}
-		}
-
-		s, ok := n.ReplyMap[n.SeqNo]
-		if !ok {
-			continue
-		}
-		if s.SeqNo != n.SeqNo {
-			return Response{Code: -1, Msg: "Simulator Error", Term: n.Term}
-		}
-		println("Got it: ", s.SeqNo, n.SeqNo, s.Msg)
-		delete(n.ReplyMap, n.SeqNo)
-		return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
+	ok := false
+	for !ok && time.Since(start) <= 2*time.Second {
+		n.ReplyCond.Wait()
+		//println("Wake up!!", n.SeqNo, time.Since(start))
+		_, ok = n.ReplyMap[curSeq]
+		fmt.Printf("Wake SeqNo: %d\n", curSeq)
 	}
+
+	// timeout after 500ms
+	if time.Since(start) >= 2*time.Second {
+		n.ReplyMutex.Unlock()
+		println("timeout")
+		return Response{Code: 408, Msg: "Timeout", Term: n.Term}
+	}
+
+	s, ok := n.ReplyMap[curSeq]
+	if !ok {
+		return Response{Code: -1, Msg: "Simulator Error", Term: n.Term}
+	}
+	if s.SeqNo != curSeq {
+		return Response{Code: -1, Msg: "Simulator Error", Term: n.Term}
+	}
+	println("Got it: ", s.SeqNo, curSeq, s.Msg)
+	delete(n.ReplyMap, curSeq)
 	n.ReplyMutex.Unlock()
-	return Response{Code: 404, Msg: "Not Found", Term: n.Term}
+	return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
 }
 
 func (n *Node) SendInitRequest(dest int) Response {
@@ -398,7 +407,7 @@ func (n *Node) Leader() {
 	n.LogEvent("Leader start")
 	for n.Active && n.State == Leader {
 		go n.PerformHeartBeat()
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -413,12 +422,14 @@ func (n *Node) Follower() {
 		for !n.LeaderReached && time.Since(start) <= 2*time.Second {
 			n.LCond.Wait()
 		}
-		fmt.Printf("Node %d # wake up.\n", n.Id)
+
 		if time.Since(start) > 2*time.Second && !n.LeaderReached {
 			n.LMutex.Unlock()
 			n.State = Candidate
 			return
 		}
+		fmt.Printf("Node %d # Receives heartbeat.\n", n.Id)
+		n.LogEvent("Receives heartbeat.\n")
 		n.LMutex.Unlock()
 	}
 }
@@ -427,6 +438,7 @@ func (n *Node) RaftRun() {
 	// Election
 	for n.Active {
 		if n.State == Leader {
+			fmt.Printf("Node %d # Leader run!!\n", n.Id)
 			n.Leader()
 		} else if n.State == Candidate {
 			n.Election()

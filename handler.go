@@ -104,7 +104,6 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 	if r.Nodes[src].Active == false || r.Nodes[dest].Active == false {
 		return false
 	}
-	println(msg)
 	m := Message{Src: src, Dest: dest, Msg: msg, Code: code, SeqNo: seqNo, Term: term}
 
 	if code == 0 { // request message
@@ -112,7 +111,6 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 		r.Nodes[dest].RequestQueue = append(r.Nodes[dest].RequestQueue, m)
 		r.Nodes[dest].RequestMutex.Unlock()
 	} else { // reply message
-		println("REPLY")
 		r.Nodes[dest].ReplyMutex.Lock()
 		r.Nodes[dest].ReplyMap[m.SeqNo] = m
 		r.Nodes[dest].ReplyMutex.Unlock()
