@@ -65,7 +65,7 @@ type Response struct {
 func InitNode(id int, h *RequestHandler) *Node {
 	return &Node{
 		Id:           id,
-		State:        0,
+		State:        Follower,
 		Term:         0,
 		Active:       false,
 		Handler:      h,
@@ -85,6 +85,8 @@ func (n *Node) LogEvent(msg string) {
 // no data race protection of n.Active, Assuming only read in nodes.
 func (n *Node) Activate() {
 	n.Active = true
+	n.State = Follower
+	n.ClientMsg = make([]string, 0)
 	n.ReplyCond = sync.NewCond(&n.ReplyMutex)
 	n.ECond = sync.NewCond(&n.EMutex)
 	n.CmtCond = sync.NewCond(&n.CmtMutex)
@@ -127,13 +129,19 @@ func (n *Node) HandleRequest(m Message) {
 				return
 			}
 		}
+		n.LMutex.Lock()
 		n.LeaderReached = true
+		n.LMutex.Unlock()
+		n.LCond.Broadcast()
 		if len(content) > 1 {
 			n.PendingMsg = content[1]
 		}
 		n.ReplyRequest(m.Src, "ACK", m.SeqNo)
 	case "commit":
+		n.LMutex.Lock()
 		n.LeaderReached = true
+		n.LMutex.Unlock()
+		n.LCond.Broadcast()
 		n.CmtMutex.Lock()
 		n.CommitLog = append(n.CommitLog, n.PendingMsg)
 		n.CmtMutex.Unlock()
@@ -185,13 +193,11 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 		n.ReplyCond.Wait()
 		//println("Wake up!!", n.SeqNo, time.Since(start))
 		_, ok = n.ReplyMap[curSeq]
-		fmt.Printf("Wake SeqNo: %d\n", curSeq)
 	}
 
 	// timeout after 500ms
 	if time.Since(start) >= 2*time.Second {
 		n.ReplyMutex.Unlock()
-		println("timeout")
 		return Response{Code: 408, Msg: "Timeout", Term: n.Term}
 	}
 
@@ -202,7 +208,6 @@ func (n *Node) SendAndListen(dest int, msg string) Response {
 	if s.SeqNo != curSeq {
 		return Response{Code: -1, Msg: "Simulator Error", Term: n.Term}
 	}
-	println("Got it: ", s.SeqNo, curSeq, s.Msg)
 	delete(n.ReplyMap, curSeq)
 	n.ReplyMutex.Unlock()
 	return Response{Code: s.Code, Msg: s.Msg, Term: s.Term}
@@ -332,17 +337,14 @@ func (n *Node) Election() {
 	n.LogEvent("Candidate start")
 	n.EMutex.Lock()
 	start := time.Now()
+	n.VoteReached = false
+
 	// Election time out (should be a randomized value)
 	duration := rand.Intn(500) + 1500
 	for !n.VoteReached && time.Since(start) <= time.Duration(duration)*time.Millisecond {
 		n.ECond.Wait()
 	}
-	/*if time.Since(start) > time.Millisecond*200 {
-		n.EMutex.Unlock()
-		return
-	}*/
-	fmt.Println(n.VoteReached)
-	//time.Sleep(time.Second * 2)
+
 	if n.VoteReached {
 		for !n.LeaderSelected && time.Since(start) <= time.Second*2 {
 			n.ECond.Wait()
@@ -363,7 +365,6 @@ func (n *Node) Election() {
 				rsp := n.SendVoteRequest(i)
 				n.EMutex.Lock()
 				if rsp.Code == 200 && rsp.Msg == "approve" {
-					println(rsp.Code)
 					cnt += 1
 				}
 				n.EMutex.Unlock()
@@ -378,7 +379,6 @@ func (n *Node) Election() {
 		println("Cnt: ", cnt)
 		n.State = Leader
 		if cnt >= n.ClusterSize/2 {
-			println(cnt, n.ClusterSize)
 			n.Term += 1
 			for i := 0; i < n.ClusterSize; i++ {
 				if i == n.Id {
@@ -407,7 +407,7 @@ func (n *Node) Leader() {
 	n.LogEvent("Leader start")
 	for n.Active && n.State == Leader {
 		go n.PerformHeartBeat()
-		time.Sleep(1 * time.Second)
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -424,10 +424,12 @@ func (n *Node) Follower() {
 		}
 
 		if time.Since(start) > 2*time.Second && !n.LeaderReached {
+			println("Not receiving.")
 			n.LMutex.Unlock()
 			n.State = Candidate
 			return
 		}
+		n.LeaderReached = false
 		fmt.Printf("Node %d # Receives heartbeat.\n", n.Id)
 		n.LogEvent("Receives heartbeat.\n")
 		n.LMutex.Unlock()

@@ -78,6 +78,7 @@ func (s *Simulator) AddPartition(w http.ResponseWriter, req *http.Request) {
 	}
 	id_nums := []int{}
 	for _, i := range id {
+		println(i)
 		id_num, err := strconv.Atoi(i)
 		if err != nil {
 			w.WriteHeader(400)
@@ -85,9 +86,13 @@ func (s *Simulator) AddPartition(w http.ResponseWriter, req *http.Request) {
 		}
 		id_nums = append(id_nums, id_num)
 	}
+	if s.Handler == nil {
+		w.WriteHeader(400)
+		w.Write([]byte("No handler yet!"))
+	}
 	s.Handler.AddPartition(id_nums)
 	w.WriteHeader(200)
-	w.Write([]byte(fmt.Sprintf("Parition added: %d\n", s.Handler.PartitionNum)))
+	w.Write([]byte(fmt.Sprintf("Parition added: %d.", s.Handler.PartitionNum)))
 }
 
 func (s *Simulator) RemovePartition(w http.ResponseWriter, req *http.Request) {

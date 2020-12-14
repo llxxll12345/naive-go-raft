@@ -17,19 +17,16 @@ Super simplified naive Golang implementation of Raft cluster concensus algorithm
   - `curl http://localhost:8080/getEvents?id=2`
 - stopNode:     Stop a specific node, with `id:int` parameter begin the id of the node.
 - startNode:    Start a specific node, with `id:int` parameter begin the id of the node.
-- addPart:      Add a new partition (Untested)
-- removePart:   Remove a partition (Untested)
+- addPart:      Add a new partition 
+- removePart:   Remove a partition 
 - clientSend:   Simulates request sending from client, will be handled by the leader node, with `msg:string` being the content of the request.
   - `curl http://localhost:8080/clientSend?msg=hello`
 
 ### Bugs
-- Fails to start sometimes. (no leader elected somehow)
-- Deadlock. 
-- Timeout condition.
+- Recovery from partition removal. New client message won't be sent.
+- Unstable for the first few seconds. (Become stable when the std output keeps looping heartbeat notifications for at least 3 seconds)
 
 ### Todo:
 - Parition merging
-- Failed leader
 - Code style fixing.
-- Remove debug printing.
 - Timeout fixing.

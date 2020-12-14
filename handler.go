@@ -44,7 +44,7 @@ func InitHandler(n int) *RequestHandler {
 
 func (r *RequestHandler) AddPartition(ids []int) {
 	r.PartitionNum += 1
-	for i, _ := range ids {
+	for _, i := range ids {
 		if i < 0 || i >= r.TotalNodes {
 			continue
 		}
@@ -89,7 +89,7 @@ func (r *RequestHandler) ListNodes() string {
 	for i := 0; i < r.TotalNodes; i++ {
 		n := r.Nodes[i]
 		if n.Active {
-			reply += fmt.Sprintf("Id: %d, state: %s, Up for: %s\n", n.Id, ParseState(n.State), time.Since(n.StartTime))
+			reply += fmt.Sprintf("Id: %d # State: %s, Paritition: %d, Up for: %s\n", n.Id, ParseState(n.State), r.Partition[i], time.Since(n.StartTime))
 		}
 	}
 	return reply
@@ -101,7 +101,8 @@ func (r *RequestHandler) SimulateSend(src, dest int, msg string, code int, seqNo
 	if src < 0 || dest < 0 || src >= len(r.Nodes) || dest >= len(r.Nodes) {
 		return false
 	}
-	if r.Nodes[src].Active == false || r.Nodes[dest].Active == false {
+	if r.Nodes[src].Active == false || r.Nodes[dest].Active == false || r.Partition[src] != r.Partition[dest] {
+		fmt.Printf("Warning: Node %d and %d are in different partitions.", src, dest)
 		return false
 	}
 	m := Message{Src: src, Dest: dest, Msg: msg, Code: code, SeqNo: seqNo, Term: term}
